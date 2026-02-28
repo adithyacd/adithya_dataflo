@@ -48,35 +48,61 @@ def _build_ffmpeg_input_args(source: str) -> list[str]:
     return ["-i", source]
 
 
-async def start_ffmpeg(source: str) -> asyncio.subprocess.Process:
+async def start_ffmpeg(source: str) -> subprocess.Popen:
     """
-    Launch FFmpeg as an async subprocess that pipes raw PCM audio to stdout.
-    No intermediate file is written.
+    Launch FFmpeg as a subprocess that pipes raw PCM audio to stdout.
+    Uses subprocess.Popen for Windows compatibility (works with any
+    asyncio event loop type, unlike asyncio.create_subprocess_exec
+    which requires ProactorEventLoop on Windows).
     """
     input_args = _build_ffmpeg_input_args(source)
 
     cmd = [
         "ffmpeg",
+        "-fflags", "nobuffer",
+        "-flags", "low_delay",
         *input_args,
         "-f", "s16le",
         "-ar", str(SAMPLE_RATE),
         "-ac", str(CHANNELS),
-        "-loglevel", "quiet",
+        "-loglevel", "warning",
         "pipe:1",
     ]
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=None,
     )
     return process
 
 
-async def read_audio_chunks(process: asyncio.subprocess.Process, chunk_size: int = CHUNK_SIZE):
-    """Async generator that yields fixed-size audio chunks from FFmpeg stdout."""
+async def read_audio_chunks(
+    process: subprocess.Popen,
+    chunk_size: int = CHUNK_SIZE,
+    pause_event: asyncio.Event | None = None,
+    realtime: bool = False,
+):
+    """Async generator that yields fixed-size audio chunks from FFmpeg stdout.
+
+    Reads are offloaded to a thread executor so they don't block the event loop.
+    pause_event: when set, reading is suspended until cleared.
+    realtime:    when True, paces output to match wall-clock playback speed.
+    """
+    chunk_duration = chunk_size / (SAMPLE_RATE * 2 * CHANNELS) if realtime else 0
+    loop = asyncio.get_running_loop()
+
     while True:
-        chunk = await process.stdout.read(chunk_size)
+        if pause_event is not None and pause_event.is_set():
+            await asyncio.sleep(0.05)
+            continue
+        t0 = loop.time()
+        chunk = await loop.run_in_executor(None, process.stdout.read, chunk_size)
         if not chunk:
             break
         yield chunk
+        if chunk_duration > 0:
+            elapsed = loop.time() - t0
+            remaining = chunk_duration - elapsed
+            if remaining > 0:
+                await asyncio.sleep(remaining)

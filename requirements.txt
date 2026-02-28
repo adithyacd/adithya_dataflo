@@ -2,3 +2,6 @@ websockets
 python-dotenv
 rapidfuzz
 yt-dlp
+fastapi
+uvicorn
+python-multipart

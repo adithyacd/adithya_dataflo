@@ -15,9 +15,11 @@ from audio_extractor import start_ffmpeg, read_audio_chunks
 
 
 class DeepgramTranscriber:
-    def __init__(self, source: str, on_transcript: Callable[[dict], Awaitable[None]]):
+    def __init__(self, source: str, on_transcript: Callable[[dict], Awaitable[None]], pause_event: asyncio.Event | None = None, realtime: bool = False):
         self.source = source
         self.on_transcript = on_transcript
+        self._pause_event = pause_event
+        self._realtime = realtime
         self._ws = None
         self._ffmpeg_process = None
 
@@ -59,7 +61,7 @@ class DeepgramTranscriber:
 
     async def _send_audio(self):
         """Read PCM chunks from FFmpeg and forward them as binary WS frames."""
-        async for chunk in read_audio_chunks(self._ffmpeg_process, CHUNK_SIZE):
+        async for chunk in read_audio_chunks(self._ffmpeg_process, CHUNK_SIZE, self._pause_event, self._realtime):
             await self._ws.send(chunk)
 
         # Signal end-of-stream so Deepgram flushes remaining audio
@@ -109,7 +111,7 @@ class DeepgramTranscriber:
         if self._ffmpeg_process:
             try:
                 self._ffmpeg_process.kill()
-                await self._ffmpeg_process.wait()
+                self._ffmpeg_process.wait()
             except Exception:
                 pass
             self._ffmpeg_process = None

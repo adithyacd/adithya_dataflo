@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Transcription System</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f0f0f;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+
+/* ---------- layout ---------- */
+.header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid #222}
+.header h1{font-size:1.3rem;font-weight:600}
+.badge{background:#d32f2f;color:#fff;font-size:.85rem;font-weight:700;padding:4px 12px;border-radius:20px;min-width:28px;text-align:center}
+
+.main{display:grid;grid-template-columns:220px 1fr 1fr;gap:16px;padding:16px 24px}
+.alerts-section{padding:0 24px 24px}
+
+/* ---------- left panel ---------- */
+.panel{background:#161616;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.panel label{font-size:.8rem;color:#999;text-transform:uppercase;letter-spacing:.5px}
+.panel input[type=text],.panel input[type=file]{width:100%;padding:8px 10px;border:1px solid #333;border-radius:6px;background:#1a1a1a;color:#e0e0e0;font-size:.9rem}
+.panel input[type=file]{padding:6px}
+.panel select{width:100%;padding:8px 10px;border:1px solid #333;border-radius:6px;background:#1a1a1a;color:#e0e0e0;font-size:.9rem}
+.radio-group{display:flex;gap:10px}
+.radio-group label{display:flex;align-items:center;gap:4px;cursor:pointer;font-size:.85rem;color:#ccc;text-transform:none;letter-spacing:0}
+.btn{padding:10px;border:none;border-radius:6px;font-size:.9rem;font-weight:600;cursor:pointer;transition:opacity .15s}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:#2979ff;color:#fff}
+.btn-danger{background:#d32f2f;color:#fff}
+.status-text{font-size:.8rem;text-align:center;padding:4px;border-radius:4px}
+
+/* ---------- video ---------- */
+.video-col{display:flex;flex-direction:column;gap:8px}
+.video-col h2,.transcript-col h2{font-size:1rem;font-weight:600;color:#aaa}
+video{width:100%;max-width:800px;border-radius:8px;background:#000}
+
+/* ---------- transcript ---------- */
+.transcript-col{display:flex;flex-direction:column;gap:8px}
+.transcript-box{background:#1a1a1a;border-radius:8px;padding:12px;font-family:'Courier New',Consolas,monospace;font-size:.85rem;line-height:1.6;height:360px;overflow-y:auto}
+.t-interim{color:#666;font-style:italic}
+.t-final{color:#fff;font-weight:bold}
+
+/* ---------- alerts ---------- */
+.alerts-section h2{font-size:1rem;font-weight:600;color:#aaa;margin-bottom:8px}
+.alert-latest{background:#d32f2f;color:#fff;padding:14px 16px;border-radius:8px;margin-bottom:8px;border:2px solid #ff5252;animation:pulse 1.5s ease-in-out infinite}
+.alert-past{background:#2a1a00;color:#e0c080;padding:10px 14px;border-radius:8px;margin-bottom:6px}
+.alert-kw{font-size:1.15rem;font-weight:700}
+.alert-meta{font-size:.8rem;margin-top:2px;opacity:.85}
+.alert-ctx{font-style:italic;margin-top:4px;font-size:.9rem}
+@keyframes pulse{
+  0%,100%{border-color:#ff5252;box-shadow:0 0 5px rgba(255,82,82,.5)}
+  50%{border-color:#ff867c;box-shadow:0 0 15px rgba(255,134,124,.5)}
+}
+.no-alerts{color:#555;font-size:.85rem}
+</style>
+</head>
+<body>
+
+<!-- ───── header ───── -->
+<div class="header">
+  <h1>&#x1F399;&#xFE0F; Live Transcription System</h1>
+  <div class="badge" id="alertBadge">0</div>
+</div>
+
+<!-- ───── 3-column layout ───── -->
+<div class="main">
+
+  <!-- left panel -->
+  <div class="panel">
+    <label>Source</label>
+    <div class="radio-group">
+      <label><input type="radio" name="srcType" value="local" checked id="radioLocal"> Local File</label>
+      <label><input type="radio" name="srcType" value="url" id="radioUrl"> URL</label>
+    </div>
+
+    <div id="localSection">
+      <div style="display:flex;gap:6px">
+        <input type="text" id="pathInput" placeholder="C:/videos/input.mp4" style="flex:1">
+        <button class="btn btn-primary" id="btnBrowse" style="padding:8px 12px;white-space:nowrap">Browse</button>
+      </div>
+    </div>
+    <div id="urlSection" style="display:none">
+      <input type="text" id="urlInput" placeholder="rtmp://... or .m3u8 or YouTube">
+    </div>
+
+    <label>Keywords</label>
+    <input type="text" id="kwInput" placeholder="fire, alert, emergency">
+
+    <button class="btn btn-primary" id="btnConnect">Connect</button>
+    <button class="btn btn-danger" id="btnStop" disabled>Stop</button>
+
+    <div class="status-text" id="statusText" style="color:#555">Not connected</div>
+  </div>
+
+  <!-- video -->
+  <div class="video-col">
+    <h2>&#x1F3AC; Video</h2>
+    <video id="videoPlayer" controls></video>
+  </div>
+
+  <!-- transcript -->
+  <div class="transcript-col">
+    <h2>&#x1F4DD; Live Transcript</h2>
+    <div class="transcript-box" id="transcriptBox">
+      <span style="color:#555">Waiting for transcript...</span>
+    </div>
+  </div>
+</div>
+
+<!-- alerts (full width) -->
+<div class="alerts-section">
+  <h2>&#x1F6A8; Alerts</h2>
+  <div id="alertsContainer"><span class="no-alerts">No alerts yet.</span></div>
+</div>
+
+<script>
+(function () {
+  const video      = document.getElementById('videoPlayer');
+  const pathInput  = document.getElementById('pathInput');
+  const btnBrowse  = document.getElementById('btnBrowse');
+  const urlInput   = document.getElementById('urlInput');
+  const kwInput    = document.getElementById('kwInput');
+  const btnConnect = document.getElementById('btnConnect');
+  const btnStop    = document.getElementById('btnStop');
+  const statusText = document.getElementById('statusText');
+  const tBox       = document.getElementById('transcriptBox');
+  const alertsCont = document.getElementById('alertsContainer');
+  const alertBadge = document.getElementById('alertBadge');
+  const radioLocal = document.getElementById('radioLocal');
+  const radioUrl   = document.getElementById('radioUrl');
+  const localSec   = document.getElementById('localSection');
+  const urlSec     = document.getElementById('urlSection');
+
+  let ws = null;
+  let alertCount = 0;
+  let started = false;
+  let pipelineActive = false;
+  let isLiveStream = false;
+
+  let transcriptQueue = [];
+  let alertQueue = [];
+  let syncTimer = null;
+
+  radioLocal.addEventListener('change', () => { localSec.style.display=''; urlSec.style.display='none'; });
+  radioUrl.addEventListener('change',   () => { localSec.style.display='none'; urlSec.style.display=''; });
+
+  function setStatus(text, color) {
+    statusText.textContent = text;
+    statusText.style.color = color || '#999';
+  }
+
+  function send(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function fmtTs(s) {
+    const t = Math.floor(s);
+    const h = String(Math.floor(t / 3600)).padStart(2, '0');
+    const m = String(Math.floor((t % 3600) / 60)).padStart(2, '0');
+    const ss = String(t % 60).padStart(2, '0');
+    return h + ':' + m + ':' + ss;
+  }
+
+  function clearPlaceholder(container, selector) {
+    const el = container.querySelector(selector);
+    if (el) container.innerHTML = '';
+  }
+
+  function appendTranscript(text, isFinal, timestamp) {
+    clearPlaceholder(tBox, 'span[style]');
+    const div = document.createElement('div');
+    div.className = isFinal ? 't-final' : 't-interim';
+    div.textContent = '[' + timestamp + '] ' + text;
+    tBox.appendChild(div);
+    tBox.scrollTop = tBox.scrollHeight;
+  }
+
+  function showAlert(msg) {
+    alertCount++;
+    alertBadge.textContent = alertCount;
+    const prev = alertsCont.querySelector('.alert-latest');
+    if (prev) prev.className = 'alert-past';
+    const ph = alertsCont.querySelector('.no-alerts');
+    if (ph) ph.remove();
+    const card = document.createElement('div');
+    card.className = 'alert-latest';
+    card.innerHTML =
+      '<div class="alert-kw">&#x1F6A8; ' + esc(msg.keyword) + '</div>' +
+      '<div class="alert-meta">Time: ' + esc(msg.timestamp) + ' | Match: ' + esc(msg.match_type) + '</div>' +
+      '<div class="alert-ctx">&ldquo;' + esc(msg.context) + '&rdquo;</div>';
+    alertsCont.prepend(card);
+  }
+
+  // replace the last interim line, or add one if none exists
+  let interimDiv = null;
+  function updateInterim(text, timestamp) {
+    clearPlaceholder(tBox, 'span[style]');
+    if (!interimDiv || !interimDiv.parentNode) {
+      interimDiv = document.createElement('div');
+      interimDiv.className = 't-interim';
+      tBox.appendChild(interimDiv);
+    }
+    interimDiv.textContent = '[' + timestamp + '] ' + text;
+    tBox.scrollTop = tBox.scrollHeight;
+  }
+
+  function lockInterim() {
+    if (interimDiv && interimDiv.parentNode) {
+      interimDiv.remove();
+    }
+    interimDiv = null;
+  }
+
+  function clearQueues() {
+    transcriptQueue = [];
+    alertQueue = [];
+  }
+
+  function startSyncTimer() {
+    if (syncTimer) return;
+    syncTimer = setInterval(() => {
+      if (!video || video.paused) return;
+      const ct = video.currentTime;
+
+      while (transcriptQueue.length > 0 && transcriptQueue[0].showAt <= ct) {
+        const item = transcriptQueue.shift();
+        appendTranscript(item.text, true, item.timestamp);
+      }
+
+      while (alertQueue.length > 0 && alertQueue[0].showAt <= ct) {
+        const item = alertQueue.shift();
+        showAlert(item);
+      }
+    }, 100);
+  }
+
+  function stopSyncTimer() {
+    if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
+  }
+
+  // ── browse button ──
+  btnBrowse.addEventListener('click', async () => {
+    setStatus('Opening file picker...', '#2979ff');
+    try {
+      const res = await fetch('/browse');
+      const data = await res.json();
+      if (data.path) {
+        pathInput.value = data.path;
+        video.src = '/local-video?path=' + encodeURIComponent(data.path);
+        clearQueues();
+        setStatus('File selected', '#4caf50');
+      } else {
+        setStatus('No file selected', '#999');
+      }
+    } catch (e) {
+      setStatus('Browse failed', '#d32f2f');
+    }
+  });
+
+  pathInput.addEventListener('change', () => {
+    const p = pathInput.value.trim();
+    if (p) {
+      video.src = '/local-video?path=' + encodeURIComponent(p);
+      clearQueues();
+    }
+  });
+
+  // ── connect button ──
+  btnConnect.addEventListener('click', () => {
+    const kw = kwInput.value.split(',').map(k => k.trim()).filter(Boolean);
+    if (!kw.length) { setStatus('Enter keywords', '#ff9800'); return; }
+
+    let source;
+    if (radioLocal.checked) {
+      isLiveStream = false;
+      source = pathInput.value.trim();
+      if (!source) { setStatus('Enter a file path or click Browse', '#ff9800'); return; }
+      video.src = '/local-video?path=' + encodeURIComponent(source);
+    } else {
+      isLiveStream = true;
+      source = urlInput.value.trim();
+      if (!source) { setStatus('Enter a URL', '#ff9800'); return; }
+      video.src = source;
+    }
+
+    tBox.innerHTML = '<span style="color:#555">Waiting for transcript...</span>';
+    alertsCont.innerHTML = '<span class="no-alerts">No alerts yet.</span>';
+    alertCount = 0;
+    alertBadge.textContent = '0';
+    started = false;
+    pipelineActive = false;
+    interimDiv = null;
+    clearQueues();
+    stopSyncTimer();
+
+    if (ws) ws.close();
+    ws = new WebSocket('ws://' + location.host + '/ws');
+
+    ws.addEventListener('open', () => {
+      send({ action: 'init', source: source, keywords: kw });
+      setStatus('Ready \u2014 play the video', '#4caf50');
+      btnConnect.disabled = true;
+      btnStop.disabled = false;
+    });
+
+    ws.addEventListener('message', (e) => {
+      const msg = JSON.parse(e.data);
+
+      if (msg.type === 'transcript') {
+        if (isLiveStream) {
+          if (msg.is_final) {
+            lockInterim();
+            appendTranscript(msg.text, true, msg.timestamp || fmtTs(msg.start));
+          } else {
+            updateInterim(msg.text, msg.timestamp || fmtTs(msg.start));
+          }
+        } else {
+          if (msg.is_final) {
+            transcriptQueue.push({
+              text: msg.text,
+              showAt: msg.start,
+              timestamp: msg.timestamp || fmtTs(msg.start),
+            });
+          }
+        }
+      }
+
+      if (msg.type === 'alert') {
+        if (isLiveStream) {
+          showAlert(msg);
+        } else {
+          alertQueue.push({
+            keyword: msg.keyword,
+            timestamp: msg.timestamp,
+            start: msg.start,
+            context: msg.context,
+            match_type: msg.match_type,
+            showAt: msg.start,
+          });
+        }
+      }
+
+      if (msg.type === 'status') {
+        if (msg.status === 'running')  setStatus('Transcribing...', '#4caf50');
+        if (msg.status === 'paused')   setStatus('Paused', '#ff9800');
+        if (msg.status === 'stopped')  setStatus('Stopped', '#999');
+        if (msg.status === 'finished') {
+          if (isLiveStream) { setStatus('Finished', '#999'); pipelineActive = false; }
+          else { setStatus('Processing complete \u2014 play to see transcript', '#4caf50'); }
+        }
+        if (msg.status === 'error')    setStatus('Error', '#d32f2f');
+        if (msg.status === 'ready') {
+          if (isLiveStream && !started) {
+            send({ action: 'start' });
+            started = true;
+            pipelineActive = true;
+          } else {
+            setStatus('Ready \u2014 play the video', '#4caf50');
+          }
+        }
+      }
+    });
+
+    ws.addEventListener('close', () => {
+      setStatus('Disconnected', '#999');
+      btnConnect.disabled = false;
+      btnStop.disabled = true;
+      pipelineActive = false;
+      stopSyncTimer();
+    });
+  });
+
+  // ── stop button ──
+  btnStop.addEventListener('click', () => {
+    send({ action: 'stop' });
+    video.pause();
+    started = false;
+    pipelineActive = false;
+    btnConnect.disabled = false;
+    btnStop.disabled = true;
+    clearQueues();
+    stopSyncTimer();
+  });
+
+  // ── video play/pause sync ──
+  video.addEventListener('play', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!started) {
+      send({ action: 'start' });
+      started = true;
+      pipelineActive = true;
+    } else if (isLiveStream && pipelineActive) {
+      send({ action: 'resume' });
+    }
+    if (!isLiveStream) startSyncTimer();
+  });
+
+  video.addEventListener('pause', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (isLiveStream && pipelineActive) send({ action: 'pause' });
+  });
+
+  video.addEventListener('seeked', () => {
+    if (isLiveStream) return;
+    clearQueues();
+  });
+})();
+</script>
+</body>
+</html>
