@@ -2,6 +2,8 @@ import asyncio
 import re
 import shutil
 import subprocess
+import sys
+import threading
 from config import SAMPLE_RATE, CHANNELS, CHUNK_SIZE
 
 
@@ -10,7 +12,6 @@ def _is_youtube_url(source: str) -> bool:
 
 
 def _resolve_youtube_url(source: str) -> str:
-    """Use yt-dlp to resolve a YouTube Live URL to its actual stream URL."""
     result = subprocess.run(
         ["yt-dlp", "--get-url", "-f", "best", source],
         capture_output=True, text=True, check=True,
@@ -32,7 +33,6 @@ def _detect_source_type(source: str) -> str:
 
 
 def _build_ffmpeg_input_args(source: str) -> list[str]:
-    """Build the input portion of the FFmpeg command based on source type."""
     source_type = _detect_source_type(source)
 
     if source_type == "youtube":
@@ -40,20 +40,38 @@ def _build_ffmpeg_input_args(source: str) -> list[str]:
         return ["-i", resolved]
 
     if source_type == "webcam":
-        if shutil.which("ffmpeg") and __import__("sys").platform == "win32":
+        if sys.platform == "win32":
             return ["-f", "dshow", "-i", "video=Integrated Camera"]
         return ["-f", "v4l2", "-i", "/dev/video0"]
 
-    # file, rtmp, hls all pass the source directly
+    if source_type in ("rtmp", "hls"):
+        return [
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
+            "-i", source,
+        ]
+
     return ["-i", source]
+
+
+def _drain_stderr(process: subprocess.Popen):
+    """Read and discard stderr in a background thread so FFmpeg never blocks."""
+    try:
+        while True:
+            line = process.stderr.readline()
+            if not line:
+                break
+            print(f"[ffmpeg] {line.decode(errors='replace').rstrip()}")
+    except Exception:
+        pass
 
 
 async def start_ffmpeg(source: str) -> subprocess.Popen:
     """
-    Launch FFmpeg as a subprocess that pipes raw PCM audio to stdout.
-    Uses subprocess.Popen for Windows compatibility (works with any
-    asyncio event loop type, unlike asyncio.create_subprocess_exec
-    which requires ProactorEventLoop on Windows).
+    Launch FFmpeg using subprocess.Popen with a large buffer.
+    Using Popen + run_in_executor is more stable on Windows than
+    asyncio.create_subprocess_exec which has pipe cancellation bugs.
     """
     input_args = _build_ffmpeg_input_args(source)
 
@@ -72,8 +90,19 @@ async def start_ffmpeg(source: str) -> subprocess.Popen:
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=None,
+        stderr=subprocess.PIPE,
+        bufsize=256 * 1024,
     )
+
+    if process.poll() is not None:
+        stderr_out = process.stderr.read()
+        raise RuntimeError(f"FFmpeg failed to start: {stderr_out.decode()}")
+
+    # Drain stderr in a daemon thread to prevent pipe buffer from filling up
+    # and blocking FFmpeg's stdout writes
+    t = threading.Thread(target=_drain_stderr, args=(process,), daemon=True)
+    t.start()
+
     return process
 
 
@@ -81,28 +110,55 @@ async def read_audio_chunks(
     process: subprocess.Popen,
     chunk_size: int = CHUNK_SIZE,
     pause_event: asyncio.Event | None = None,
-    realtime: bool = False,
+    speed_factor: float = 1.0,
 ):
-    """Async generator that yields fixed-size audio chunks from FFmpeg stdout.
-
-    Reads are offloaded to a thread executor so they don't block the event loop.
-    pause_event: when set, reading is suspended until cleared.
-    realtime:    when True, paces output to match wall-clock playback speed.
     """
-    chunk_duration = chunk_size / (SAMPLE_RATE * 2 * CHANNELS) if realtime else 0
+    Async generator that yields fixed-size audio chunks from FFmpeg stdout.
+    Uses run_in_executor for stable blocking reads on Windows.
+
+    speed_factor controls how fast audio is emitted relative to realtime:
+      1.0 = realtime, 3.0 = 3x faster, 0 = no throttle (not recommended).
+    """
+    bytes_per_second = SAMPLE_RATE * 2 * CHANNELS
+    chunk_realtime_duration = chunk_size / bytes_per_second
+    if speed_factor > 0:
+        target_interval = chunk_realtime_duration / speed_factor
+    else:
+        target_interval = 0
+
     loop = asyncio.get_running_loop()
+    consecutive_empty = 0
 
     while True:
         if pause_event is not None and pause_event.is_set():
             await asyncio.sleep(0.05)
             continue
+
         t0 = loop.time()
-        chunk = await loop.run_in_executor(None, process.stdout.read, chunk_size)
-        if not chunk:
+
+        try:
+            chunk = await loop.run_in_executor(
+                None, process.stdout.read, chunk_size
+            )
+        except Exception as e:
+            print(f"[audio] Read error: {e}")
             break
+
+        if not chunk:
+            if process.poll() is None:
+                consecutive_empty += 1
+                if consecutive_empty > 100:
+                    print("[audio] Too many empty reads while FFmpeg running — aborting.")
+                    break
+                await asyncio.sleep(0.01)
+                continue
+            break
+
+        consecutive_empty = 0
         yield chunk
-        if chunk_duration > 0:
+
+        if target_interval > 0:
             elapsed = loop.time() - t0
-            remaining = chunk_duration - elapsed
+            remaining = target_interval - elapsed
             if remaining > 0:
                 await asyncio.sleep(remaining)

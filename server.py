@@ -1,4 +1,18 @@
+import sys
 import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    # suppress WinError 10054 pipe reset noise from ProactorEventLoop
+    import asyncio.proactor_events
+    _orig = asyncio.proactor_events._ProactorBasePipeTransport._call_connection_lost
+    def _patched(self, exc):
+        try:
+            _orig(self, exc)
+        except ConnectionResetError:
+            pass
+    asyncio.proactor_events._ProactorBasePipeTransport._call_connection_lost = _patched
+
 import json
 import os
 import threading
@@ -119,7 +133,6 @@ async def websocket_endpoint(ws: WebSocket):
                 source=source,
                 on_transcript=on_transcript,
                 pause_event=pause_event,
-                realtime=False,
             )
             await transcriber.run()
             await _send({"type": "status", "status": "finished"})
@@ -186,3 +199,8 @@ async def websocket_endpoint(ws: WebSocket):
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

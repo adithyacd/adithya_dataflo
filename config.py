@@ -8,7 +8,7 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 SAMPLE_RATE = 16000
 CHANNELS = 1
 ENCODING = "linear16"
-CHUNK_SIZE = 2000  # ~62ms of 16kHz 16-bit mono audio
+CHUNK_SIZE = 8000  # ~250ms of 16kHz 16-bit mono audio
 
 DEEPGRAM_WS_URL = (
     "wss://api.deepgram.com/v1/listen"
@@ -18,10 +18,15 @@ DEEPGRAM_WS_URL = (
     "&interim_results=true"
     "&punctuate=true"
     "&word_timestamps=true"
-    "&endpointing=150"
+    "&endpointing=300"
+    "&utterance_end_ms=1500"
     "&model=nova-2"
     "&smart_format=true"
+    "&vad_events=true"
 )
+
+BATCH_SPEED_FACTOR = 3.0
+RECEIVE_TIMEOUT = 30
 
 FUZZY_THRESHOLD = 85
 
